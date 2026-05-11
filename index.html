@@ -1973,6 +1973,11 @@ async function showCurate(issue) {
   const defaultCodes = (issueRow && issueRow.codes) || ["604.3.1", "604.3.2"];
   renderCodesList(defaultCodes.map(c => ({ code: c })));
 
+  // Snapshot the baseline now (synth note + default codes loaded) so the Approve
+  // button stays disabled until the user actually changes something.
+  state.originalSig = editSignature();
+  refreshApproveButtonState();
+
   // Async: fetch existing entry + variants from Supabase; merge in if present
   try {
     const { catalog, notes } = await fetchExistingForEntry(state.element, issue);
@@ -2020,6 +2025,7 @@ document.querySelectorAll('.seg button').forEach(b => {
     b.classList.add('on');
     if (status === 'Area of Concern') b.classList.add('warn');
     if (status === 'Could Not Verify') b.classList.add('dim');
+    refreshApproveButtonState();
   });
 });
 
@@ -2050,30 +2056,27 @@ async function fetchExistingForEntry(element, issue) {
   return { catalog, notes };
 }
 
-// Compute a stable signature of "note text + ordered code list" so we can
-// detect when the user has actually changed anything from the loaded variant.
+// Compute a stable signature of "note text + ordered code list + status" so we can
+// detect when the user has actually changed anything from the loaded baseline.
 function editSignature() {
   const note = (noteText.value || '').trim();
   const codes = [...codesList.querySelectorAll('.ccard')].map(c => c.dataset.code).join(',');
-  return note + '|||' + codes;
+  const status = state.status || 'Not Acceptable';
+  return note + '|||' + codes + '|||' + status;
 }
 
 function refreshApproveButtonState() {
   const btn = $('#approveBtn');
+  const baseline = state.originalSig;
+  const changed = baseline != null && editSignature() !== baseline;
   if (state.editingNoteId) {
     btn.classList.add('update-mode');
-    const changed = editSignature() !== state.editOriginalSig;
-    if (changed) {
-      btn.disabled = false;
-      btn.textContent = '💾 Update This Variant';
-    } else {
-      btn.disabled = true;
-      btn.textContent = '💾 No changes yet';
-    }
+    btn.disabled = !changed;
+    btn.textContent = changed ? '💾 Update This Variant' : '💾 No changes yet';
   } else {
     btn.classList.remove('update-mode');
-    btn.disabled = false;
-    btn.textContent = '✓ Approve & Add to Catalog';
+    btn.disabled = !changed;
+    btn.textContent = changed ? '✓ Approve & Add to Catalog' : '✓ No changes yet';
   }
 }
 
@@ -2081,18 +2084,19 @@ function enterEditMode(noteId, noteText_, codeRefs) {
   state.editingNoteId = noteId;
   noteText.value = noteText_;
   autoResize(noteText);
-  // Replace code list with the variant's codes
   renderCodesList((codeRefs || []).map(c => ({ code: c.code || c.section, title: c.title || '', body: c.body || '' })));
   // Snapshot AFTER renderCodesList so the signature reflects what was loaded
-  state.editOriginalSig = editSignature();
+  state.originalSig = editSignature();
   $('#editBanner').classList.add('show');
   refreshApproveButtonState();
 }
 
 function exitEditMode() {
   state.editingNoteId = null;
-  state.editOriginalSig = null;
   $('#editBanner').classList.remove('show');
+  // New baseline = whatever's in the editor at the moment of exit, so the button
+  // is disabled until the user actually modifies something new.
+  state.originalSig = editSignature();
   refreshApproveButtonState();
 }
 
