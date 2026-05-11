@@ -210,10 +210,66 @@
   .pick-variant-btn .arr { color: var(--text-faint); font-size: 16px; }
   .variant-item {
     display: flex; align-items: flex-start; gap: 12px;
-    padding: 14px; background: var(--panel);
+    padding: 14px 14px 14px 14px; background: var(--panel);
     border: 1px solid var(--border); border-radius: 10px;
     margin-bottom: 8px; cursor: pointer; user-select: none;
+    position: relative;
   }
+  .variant-item.saved { border-color: var(--good); background: var(--good-bg); }
+  .variant-item .saved-tag {
+    font-size: 10px; color: var(--good); background: var(--bg);
+    padding: 3px 7px; border-radius: 8px; font-weight: 600;
+    flex-shrink: 0; align-self: flex-start;
+  }
+  .variant-item .real-tag, .variant-item .tmpl-tag {
+    font-size: 10px; padding: 3px 7px; border-radius: 8px; font-weight: 600;
+    flex-shrink: 0; align-self: flex-start;
+  }
+  .variant-item .real-tag { background: var(--bg); color: var(--accent); }
+  .variant-item .tmpl-tag { background: var(--bg); color: var(--text-faint); }
+  .variant-item .del-variant {
+    position: absolute; top: 8px; right: 8px;
+    width: 26px; height: 26px; border-radius: 13px;
+    background: var(--panel-2); color: var(--text-faint);
+    border: 1px solid var(--border-strong);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; cursor: pointer; line-height: 1;
+  }
+  .variant-item .del-variant:active { background: var(--danger); color: white; border-color: var(--danger); }
+  .variant-item.saved .vt { padding-right: 32px; }
+
+  .edit-mode-banner {
+    display: none;
+    align-items: center; gap: 10px;
+    background: var(--good-bg); border: 1px solid var(--good);
+    border-radius: 10px; padding: 10px 14px;
+    margin-bottom: 12px; font-size: 12.5px; color: var(--good);
+  }
+  .edit-mode-banner.show { display: flex; }
+  .edit-mode-banner .exit {
+    margin-left: auto; background: transparent; border: 1px solid var(--good);
+    color: var(--good); font-size: 11px; padding: 4px 10px; border-radius: 6px;
+    cursor: pointer; font-family: inherit;
+  }
+  .edit-mode-banner .exit:active { background: var(--good); color: var(--bg); }
+
+  .delete-entry-zone {
+    margin-top: 24px; padding-top: 16px; border-top: 1px dashed var(--border);
+    text-align: center;
+  }
+  .delete-entry-zone .del {
+    background: transparent; color: var(--danger);
+    border: 1px solid var(--danger); border-radius: 8px;
+    padding: 10px 18px; font-size: 12.5px; font-weight: 500;
+    cursor: pointer; font-family: inherit;
+  }
+  .delete-entry-zone .del:active { background: var(--danger); color: white; }
+  .delete-entry-zone.hidden { display: none; }
+
+  .approve-bar .approve.update-mode {
+    background: #1e3a5f; color: #bfdbfe; border-color: #2563eb;
+  }
+  .approve-bar .approve.update-mode:active { background: #1e40af; }
   .variant-item:active { background: var(--panel-2); }
   .variant-item.current { border-color: var(--accent); background: var(--accent-bg); }
   .variant-item .freq {
@@ -526,6 +582,10 @@
     <div class="ctx-elem" id="ctxElem"></div>
     <div class="ctx-issue" id="ctxIssue"></div>
   </div>
+  <div class="edit-mode-banner" id="editBanner">
+    <span>✎ Editing existing variant</span>
+    <button type="button" class="exit" id="exitEditBtn">Exit edit mode</button>
+  </div>
   <div class="curate-section">
     <div class="sec-head">
       <span>Note text · canonical phrasing</span>
@@ -554,6 +614,10 @@
       <button data-status="Area of Concern" class="warn-opt">Area of Concern</button>
       <button data-status="Could Not Verify" class="dim-opt">Could Not Verify</button>
     </div>
+  </div>
+
+  <div class="delete-entry-zone hidden" id="deleteEntryZone">
+    <button type="button" class="del" id="deleteEntryBtn">🗑 Delete this entry from the catalog</button>
   </div>
 </div>
 
@@ -1454,7 +1518,13 @@ const codesList = $('#codesList');
 const codesMeta = $('#codesMeta');
 
 let stack = [];   // breadcrumb stack: ['subject', {subject:'Toilet Rooms'}, ...]
-let state = { subject: null, element: null, issue: null, status: 'Not Acceptable' };
+let state = {
+  subject: null, element: null, issue: null,
+  status: 'Not Acceptable',
+  currentCatalogId: null,    // uuid if this (element, issue) already has an entry
+  editingNoteId: null,       // uuid of note being edited (if any)
+  savedVariants: [],         // array of {id, text, codes, useCount} from markup_notes
+};
 
 function decode(s) { return s.replace(/&amp;/g, '&'); }
 
@@ -1671,7 +1741,7 @@ function showIssue(element) {
   }
 }
 
-function showCurate(issue) {
+async function showCurate(issue) {
   state.issue = issue;
   pushNav('curate', { subject: state.subject, element: state.element, issue });
   setScreen('curate');
@@ -1681,58 +1751,72 @@ function showCurate(issue) {
   $('#ctxSubj').textContent  = state.subject;
   $('#ctxElem').textContent  = state.element;
   $('#ctxIssue').textContent = issue;
+  // Reset edit/delete UI to default state
+  exitEditMode();
+  state.currentCatalogId = null;
+  state.savedVariants = [];
+  $('#deleteEntryZone').classList.add('hidden');
 
-  // Populate variants — three-tier priority:
-  //   1. REAL mined notes from markups_cleaned.json keyed by "Element|||Issue" (your actual past wording)
-  //   2. SAMPLE_VARIANTS_BY_ISSUE template keyed by issue name (RAS-style placeholders)
-  //   3. Generic fallback constructed from the tuple
-  // {element} placeholder in templates is substituted with the actual element name.
+  // Build synth (mined + template) variants first so the picker is populated immediately
   const subst = t => (t || '').replace(/\{element\}/g, state.element);
   const realKey = `${state.element}|||${issue}`;
   const real = REAL_NOTES_BY_PAIR[realKey];
-  let variants, source;
+  let synthVariants;
   if (real && real.length) {
-    variants = real.map(v => ({ freq: v.f, text: v.t, real: true }));
-    source = `${variants.length} mined from past reports`;
+    synthVariants = real.map(v => ({ freq: v.f, text: v.t, source: 'real' }));
   } else if (SAMPLE_VARIANTS_BY_ISSUE[issue]) {
-    variants = SAMPLE_VARIANTS_BY_ISSUE[issue].map(v => ({ freq: v.freq, text: subst(v.text), real: false }));
-    source = `${variants.length} template variant${variants.length === 1 ? '' : 's'}`;
+    synthVariants = SAMPLE_VARIANTS_BY_ISSUE[issue].map(v => ({ freq: v.freq, text: subst(v.text), source: 'tmpl' }));
   } else {
-    variants = [{ freq: 1, text: `The ${state.element} in the clouded location did not comply with the ${issue} requirements (see referenced code sections below).`, real: false }];
-    source = 'no mined notes — fallback template';
+    synthVariants = [{ freq: 1, text: `The ${state.element} in the clouded location did not comply with the ${issue} requirements (see referenced code sections below).`, source: 'tmpl' }];
   }
-  noteText.value = variants[0]?.text || '';
+  noteText.value = synthVariants[0]?.text || '';
   autoResize(noteText);
-  variantsMeta.textContent = source;
-  currentVariants = variants;
-  if (variants.length > 0) {
-    pickVariantLabel.textContent = `Pick from ${variants.length} mined variant${variants.length === 1 ? '' : 's'}`;
-    pickVariantBtn.classList.remove('hidden');
-  } else {
-    pickVariantBtn.classList.add('hidden');
+  currentVariants = synthVariants;
+  variantsMeta.textContent = `${synthVariants.length} suggestion${synthVariants.length === 1 ? '' : 's'}`;
+  pickVariantLabel.textContent = `Pick from ${synthVariants.length} suggestion${synthVariants.length === 1 ? '' : 's'}`;
+  pickVariantBtn.classList.remove('hidden');
+
+  // Code refs — default from the issue's mined code list
+  const issueRow = (ISSUES_BY_ELEMENT[state.element] || []).find(i => i.name === issue);
+  const defaultCodes = (issueRow && issueRow.codes) || ["604.3.1", "604.3.2"];
+  renderCodesList(defaultCodes.map(c => ({ code: c })));
+
+  // Async: fetch existing entry + variants from Supabase; merge in if present
+  try {
+    const { catalog, notes } = await fetchExistingForEntry(state.element, issue);
+    if (state.issue !== issue) return;  // user navigated away
+    if (catalog) {
+      state.currentCatalogId = catalog.id;
+      state.savedVariants = notes.map(n => ({
+        id: n.id,
+        text: n.note_text || '',
+        codes: Array.isArray(n.code_refs) ? n.code_refs : [],
+        useCount: n.use_count || 0,
+      }));
+      // Prepend saved variants to the picker (highest priority)
+      const savedAsVariants = state.savedVariants.map(s => ({
+        freq: s.useCount, text: s.text, source: 'saved',
+        noteId: s.id, codes: s.codes,
+      }));
+      currentVariants = [...savedAsVariants, ...synthVariants];
+      const savedCount = savedAsVariants.length;
+      variantsMeta.textContent = savedCount
+        ? `${savedCount} saved · ${synthVariants.length} suggestion${synthVariants.length === 1 ? '' : 's'}`
+        : `${synthVariants.length} suggestion${synthVariants.length === 1 ? '' : 's'}`;
+      pickVariantLabel.textContent = savedCount
+        ? `Pick from ${savedCount} saved + ${synthVariants.length} suggestions`
+        : `Pick from ${synthVariants.length} suggestion${synthVariants.length === 1 ? '' : 's'}`;
+      // If there's at least one saved variant, auto-load the most-used one into the editor
+      if (savedAsVariants.length > 0) {
+        const top = savedAsVariants[0];
+        enterEditMode(top.noteId, top.text, top.codes);
+      }
+      $('#deleteEntryZone').classList.remove('hidden');
+    }
+  } catch (e) {
+    // Silent — synth variants still work
   }
 
-  // Code refs — derive from the issue's codes list
-  const issueRow = (ISSUES_BY_ELEMENT[state.element] || []).find(i => i.name === issue);
-  const codes = (issueRow && issueRow.codes) || ["604.3.1", "604.3.2"];
-  codesMeta.textContent = `${codes.length} pre-loaded · tap ✕ to remove`;
-  codesList.innerHTML = codes.map(c => {
-    const data = getCodeBody(c);
-    return `
-      <div class="ccard" data-code="${c}">
-        <div class="dh" title="Drag to reorder">⋮⋮</div>
-        <div class="x">✕</div>
-        <div class="head"><span class="code-num">${c}</span><span class="code-title">${data.title}</span></div>
-        <div class="code-body">${data.body}</div>
-      </div>`;
-  }).join('');
-  codesList.querySelectorAll('.ccard .x').forEach(x => {
-    x.addEventListener('click', e => {
-      e.stopPropagation();
-      x.closest('.ccard').remove();
-      codesMeta.textContent = `${codesList.querySelectorAll('.ccard').length} loaded`;
-    });
-  });
 }
 
 // Status segmented control
@@ -1753,6 +1837,116 @@ document.querySelectorAll('.seg button').forEach(b => {
 const SUPABASE_URL = 'https://vidyyayewzthhisewvea.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZpZHl5YXlld3p0aGhpc2V3dmVhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDYyMTY5MjUsImV4cCI6MjA2MTc5MjkyNX0.cra2uWGzUazIyLtwVvOGApg-8UkYJ6UVWdCRcHSPnIs';
 
+// =================================================================
+// Existing-entry support: fetch saved catalog row + variants on demand
+// =================================================================
+async function fetchExistingForEntry(element, issue) {
+  // Find catalog row (anon SELECT is allowed via RLS policy we added)
+  const e = encodeURIComponent(element);
+  const i = encodeURIComponent(issue);
+  const catUrl = `${SUPABASE_URL}/rest/v1/markup_catalog?element=eq.${e}&issue=eq.${i}&select=id,subject,default_status,use_count`;
+  const headers = { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` };
+  const catResp = await fetch(catUrl, { headers });
+  if (!catResp.ok) return { catalog: null, notes: [] };
+  const catRows = await catResp.json();
+  if (!catRows.length) return { catalog: null, notes: [] };
+  const catalog = catRows[0];
+
+  const notesUrl = `${SUPABASE_URL}/rest/v1/markup_notes?catalog_id=eq.${catalog.id}&select=id,note_text,code_refs,use_count&order=use_count.desc.nullslast`;
+  const notesResp = await fetch(notesUrl, { headers });
+  const notes = notesResp.ok ? await notesResp.json() : [];
+  return { catalog, notes };
+}
+
+function enterEditMode(noteId, noteText_, codeRefs) {
+  state.editingNoteId = noteId;
+  noteText.value = noteText_;
+  autoResize(noteText);
+  // Replace code list with the variant's codes
+  renderCodesList((codeRefs || []).map(c => ({ code: c.code || c.section, title: c.title || '', body: c.body || '' })));
+  $('#editBanner').classList.add('show');
+  const btn = $('#approveBtn');
+  btn.classList.add('update-mode');
+  btn.textContent = '💾 Update This Variant';
+}
+
+function exitEditMode() {
+  state.editingNoteId = null;
+  $('#editBanner').classList.remove('show');
+  const btn = $('#approveBtn');
+  btn.classList.remove('update-mode');
+  btn.textContent = '✓ Approve & Add to Catalog';
+}
+
+function renderCodesList(codes) {
+  // Render given list of {code, title, body} into codesList. Reuses ccard structure.
+  codesList.innerHTML = codes.map(c => {
+    const data = c.body ? c : getCodeBody(c.code);
+    return `
+      <div class="ccard" data-code="${c.code}">
+        <div class="dh" title="Drag to reorder">⋮⋮</div>
+        <div class="x">✕</div>
+        <div class="head"><span class="code-num">${c.code}</span><span class="code-title">${data.title}</span></div>
+        <div class="code-body">${data.body || ''}</div>
+      </div>`;
+  }).join('');
+  codesList.querySelectorAll('.ccard .x').forEach(x => {
+    x.addEventListener('click', e => {
+      e.stopPropagation();
+      x.closest('.ccard').remove();
+      codesMeta.textContent = `${codesList.querySelectorAll('.ccard').length} loaded`;
+    });
+  });
+  codesMeta.textContent = `${codes.length} loaded · tap ✕ to remove`;
+}
+
+async function deleteSavedVariant(noteId) {
+  if (!confirm('Delete this note variant from the catalog? Other variants for this entry will remain.')) return;
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_delete_note`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_note_id: noteId }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result?.message || `HTTP ${resp.status}`);
+    showToast('✓ Variant deleted', true);
+    // Remove from local state and re-render picker
+    state.savedVariants = state.savedVariants.filter(v => v.id !== noteId);
+    currentVariants = currentVariants.filter(v => v.noteId !== noteId);
+    if (state.editingNoteId === noteId) exitEditMode();
+    openVariantPicker();
+  } catch (err) {
+    showToast(`✕ Delete failed: ${err.message}`, false);
+  }
+}
+
+async function deleteCurrentEntry() {
+  if (!state.currentCatalogId) return;
+  if (!confirm(`Delete "${state.element} / ${state.issue}" from the catalog?\n\nAll ${state.savedVariants.length} note variant(s) will be removed.`)) return;
+  try {
+    const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_delete_entry`, {
+      method: 'POST',
+      headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ p_catalog_id: state.currentCatalogId }),
+    });
+    const result = await resp.json();
+    if (!resp.ok) throw new Error(result?.message || `HTTP ${resp.status}`);
+    showToast(`✓ Entry deleted (${state.element} / ${state.issue})`, true);
+    // Mark un-curated locally
+    const issueRow = (ISSUES_BY_ELEMENT[state.element] || []).find(i => i.name === state.issue);
+    if (issueRow && issueRow.curated) {
+      issueRow.curated = false;
+      const elem = (ELEMENTS_BY_SUBJECT[state.subject] || []).find(e => e.name === state.element);
+      if (elem && elem.curated > 0) elem.curated--;
+      refreshSubjectBadges();
+    }
+    setTimeout(() => history.back(), 800);
+  } catch (err) {
+    showToast(`✕ Delete failed: ${err.message}`, false);
+  }
+}
+
 function buildCodeRefsPayload() {
   // Read current code-cards in order (drag-reorder is reflected in the DOM)
   return [...codesList.querySelectorAll('.ccard')].map(card => {
@@ -1771,11 +1965,37 @@ async function approveToCatalog() {
   }
 
   const btn = $('#approveBtn');
+  const isUpdate = !!state.editingNoteId;
   btn.disabled = true;
-  btn.textContent = '⏳ Saving to catalog…';
+  btn.textContent = isUpdate ? '⏳ Updating…' : '⏳ Saving to catalog…';
 
   try {
-    const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_markup`, {
+    let resp, result;
+    if (isUpdate) {
+      // Update existing variant in place
+      resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_update_note`, {
+        method: 'POST',
+        headers: { 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          p_note_id:   state.editingNoteId,
+          p_note_text: note,
+          p_code_refs: buildCodeRefsPayload(),
+        }),
+      });
+      result = await resp.json();
+      if (!resp.ok) throw new Error(result?.message || result?.error || `HTTP ${resp.status}`);
+      showToast(`✓ Variant updated`, true);
+      // Update local saved variant
+      const sv = state.savedVariants.find(s => s.id === state.editingNoteId);
+      if (sv) { sv.text = note; sv.codes = buildCodeRefsPayload(); }
+      // Stay on the curate card; user can keep editing or back out
+      btn.disabled = false;
+      btn.textContent = '💾 Update This Variant';
+      return;
+    }
+
+    // Otherwise: create-or-bump path via catalog_markup
+    resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_markup`, {
       method: 'POST',
       headers: {
         'apikey':        SUPABASE_ANON_KEY,
@@ -1793,7 +2013,7 @@ async function approveToCatalog() {
       }),
     });
 
-    const result = await resp.json();
+    result = await resp.json();
     if (!resp.ok) {
       const msg = result?.message || result?.error || result?.hint || `HTTP ${resp.status}`;
       throw new Error(msg);
@@ -1824,6 +2044,8 @@ async function approveToCatalog() {
 }
 
 $('#approveBtn').addEventListener('click', approveToCatalog);
+$('#exitEditBtn').addEventListener('click', exitEditMode);
+$('#deleteEntryBtn').addEventListener('click', deleteCurrentEntry);
 
 // Back button = browser back (works for mouse back/forward, swipe, popstate)
 backBtn.addEventListener('click', () => history.back());
@@ -2069,29 +2291,61 @@ function addCodeFromPicker(code) {
 
 // Variant picker
 function openVariantPicker() {
-  const anyReal = currentVariants.some(v => v.real);
-  $('#variantTitle').textContent = anyReal
-    ? `Pick a note variant · from your past reports`
-    : `Pick a note variant · template (no past report match)`;
-  variantList.innerHTML = currentVariants.map(v => {
-    const isCurrent = v.text === noteText.value.trim();
-    const tag = v.real
-      ? '<span class="freq" style="background:#14331f;color:#4ade80" title="From your past reports">real</span>'
-      : '<span class="freq" style="background:#1f2937;color:#94a3b8" title="Generated template — no past report matched this (Element, Issue)">tmpl</span>';
-    return `<div class="variant-item ${isCurrent ? 'current' : ''}" data-text="${v.text.replace(/"/g, '&quot;')}">
+  const savedCount = currentVariants.filter(v => v.source === 'saved').length;
+  const realCount  = currentVariants.filter(v => v.source === 'real').length;
+  $('#variantTitle').textContent = savedCount
+    ? `${savedCount} saved · ${currentVariants.length - savedCount} suggestion${currentVariants.length - savedCount === 1 ? '' : 's'}`
+    : (realCount ? `Pick a note variant · from past reports` : `Pick a note variant · template`);
+
+  variantList.innerHTML = currentVariants.map((v, idx) => {
+    const isCurrent = (v.source === 'saved' && state.editingNoteId === v.noteId)
+                   || (v.source !== 'saved' && !state.editingNoteId && v.text === noteText.value.trim());
+    let tag, srcClass = '';
+    if (v.source === 'saved') {
+      tag = `<span class="saved-tag" title="Already in catalog">saved</span>`;
+      srcClass = 'saved';
+    } else if (v.source === 'real') {
+      tag = `<span class="real-tag" title="From your past reports">real</span>`;
+    } else {
+      tag = `<span class="tmpl-tag" title="Generated template (no past report matched)">tmpl</span>`;
+    }
+    const delBtn = v.source === 'saved'
+      ? `<button class="del-variant" type="button" data-del="${v.noteId}" aria-label="Delete this variant">✕</button>`
+      : '';
+    return `<div class="variant-item ${srcClass} ${isCurrent ? 'current' : ''}" data-idx="${idx}">
       <span class="freq">×${v.freq}</span>
       ${tag}
-      <div class="vt">${v.text}</div>
+      <div class="vt">${v.text.replace(/</g, '&lt;')}</div>
+      ${delBtn}
     </div>`;
   }).join('');
+
+  // Tap variant body → load into editor
   variantList.querySelectorAll('.variant-item').forEach(el => {
-    el.addEventListener('click', () => {
-      noteText.value = el.dataset.text;
-      autoResize(noteText);
+    el.addEventListener('click', e => {
+      if (e.target.closest('.del-variant')) return;
+      const v = currentVariants[parseInt(el.dataset.idx)];
+      if (v.source === 'saved') {
+        enterEditMode(v.noteId, v.text, v.codes);
+        showToast('✎ Editing saved variant', true);
+      } else {
+        exitEditMode();
+        noteText.value = v.text;
+        autoResize(noteText);
+        showToast('✓ Note updated', true);
+      }
       closeVariantPicker();
-      showToast('✓ Note updated', true);
     });
   });
+
+  // Delete X on saved variants
+  variantList.querySelectorAll('.del-variant').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteSavedVariant(btn.dataset.del);
+    });
+  });
+
   variantPicker.classList.add('show');
 }
 function closeVariantPicker() { variantPicker.classList.remove('show'); }
