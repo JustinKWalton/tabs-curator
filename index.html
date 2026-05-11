@@ -2144,7 +2144,7 @@ function updateScopingBanner() {
   if (!suggested) { banner.classList.remove('show'); return; }
   const data = getCodeBody(suggested);
   $('#scopingMsg').innerHTML =
-    `No scoping reference (Ch 2) cited. Suggested: <strong>${suggested}</strong> ${data.title || ''} — scopes one of your current codes into compliance.`;
+    `No scoping reference (Ch 2) cited. Suggested: <strong>${suggested}</strong> ${data.title || ''} — brings one of your selected codes into scope.`;
   $('#scopingAdd').dataset.code = suggested;
   banner.classList.add('show');
 }
