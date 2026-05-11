@@ -1973,7 +1973,7 @@ function updateScopingBanner() {
     banner.classList.remove('show');
     return;
   }
-  const suggested = findScopingForCodes(codes);
+  const suggested = findScopingForCodes(codes, state.subject);
   if (!suggested) { banner.classList.remove('show'); return; }
   const data = getCodeBody(suggested);
   $('#scopingMsg').innerHTML =
@@ -2419,26 +2419,89 @@ function chapterOf(code) {
   return Math.floor(n / 100);
 }
 
-// BFS through reverse-refs to find a Chapter 2 (scoping) ancestor of any current code
-function findScopingForCodes(codes) {
+// For 606.3.1 returns ['606.3.1', '606.3', '606'] — useful because Ch 2 sections
+// usually cite the parent (e.g., 212.3 cites 606, not 606.3 specifically).
+function expandToParents(code) {
+  const parts = String(code).split('.');
+  const out = [];
+  for (let i = parts.length; i > 0; i--) {
+    out.push(parts.slice(0, i).join('.'));
+  }
+  return out;
+}
+
+// Subject → code-section anchors. Used to prefer Ch 2 scoping suggestions that
+// actually fit the current subject (e.g., for Kitchens & Break Rooms, prefer 212.x).
+const SUBJECT_CODE_ANCHORS = {
+  "Toilet Rooms":                   ["213","604","605","606","603"],
+  "Bathing Rooms":                  ["213.3","607","608"],
+  "Pools, Spas & Saunas":           ["242","1009","241","612"],
+  "Drinking Fountains":             ["211","602"],
+  "Laundry Rooms":                  ["214","611"],
+  "Kitchens & Break Rooms":         ["212","804"],
+  "Parking":                        ["208","502"],
+  "Routes":                         ["206","402","403"],
+  "Ramps":                          ["206","405","406"],
+  "Stairs":                         ["210","504"],
+  "Doors & Doorways":               ["404","206.5"],
+  "Windows":                        ["229"],
+  "Elevators & Lifts":              ["407","408","409","410","206.6"],
+  "Transportation":                 ["218","810","705"],
+  "Guest Rooms / Lodging":          ["224","806"],
+  "Medical Care & LTC":             ["223","805"],
+  "Residential Dwellings":          ["233","809"],
+  "Detention & Holding":            ["232","807"],
+  "Courtrooms":                     ["231.2","808"],
+  "Counters & Service":             ["227","904"],
+  "Storage":                        ["225","811"],
+  "Public Devices":                 ["228"],
+  "Signage":                        ["216","703"],
+  "Fire Alarms":                    ["215","702"],
+  "Public Communication Devices":   ["217","219","220","230","704","706","707","708"],
+  "Assembly Areas":                 ["221","802"],
+  "Dressing, Fitting & Locker":     ["222","803"],
+  "Recreation":                     ["1002","1003","1004","1005","1006","1007","1008","1010"],
+  "Operable Parts":                 ["205","309"],
+  "Protruding Objects":             ["204","307"],
+};
+
+// BFS through reverse-refs (and parent-code chains) to collect Ch 2 candidates,
+// then score each by depth (closer = better) and subject anchor match.
+function findScopingForCodes(codes, currentSubject) {
   if (!codes.length) return null;
+  // Seed BFS with each code AND its parent chain, since back-refs usually land on parents
   const visited = new Set();
-  const queue = [];
-  for (const c of codes) { if (!visited.has(c)) { visited.add(c); queue.push(c); } }
-  let depth = 0;
-  while (queue.length && depth < 4) {
-    const layerSize = queue.length;
-    for (let i = 0; i < layerSize; i++) {
-      const c = queue.shift();
-      if (chapterOf(c) === 2) return c;
+  const layer = [];
+  for (const c of codes) {
+    for (const p of expandToParents(c)) {
+      if (!visited.has(p)) { visited.add(p); layer.push({ code: p, depth: 0 }); }
+    }
+  }
+  // Collect all Ch 2 candidates within depth limit
+  const candidates = [];
+  let frontier = layer;
+  while (frontier.length) {
+    const next = [];
+    for (const { code: c, depth } of frontier) {
+      if (chapterOf(c) === 2) candidates.push({ code: c, depth });
+      if (depth >= 4) continue;
       const parents = REV_REFS[c] || [];
       for (const p of parents) {
-        if (!visited.has(p)) { visited.add(p); queue.push(p); }
+        if (!visited.has(p)) { visited.add(p); next.push({ code: p, depth: depth + 1 }); }
       }
     }
-    depth++;
+    frontier = next;
   }
-  return null;
+  if (!candidates.length) return null;
+  // Score: prefer subject-anchor matches, then shallower depth
+  const anchors = SUBJECT_CODE_ANCHORS[currentSubject] || [];
+  const matchesAnchor = c => anchors.some(a => c === a || c.startsWith(a + '.'));
+  const scored = candidates.map(cand => ({
+    code: cand.code,
+    score: (matchesAnchor(cand.code) ? 1000 : 0) - cand.depth * 10,
+  }));
+  scored.sort((a, b) => b.score - a.score);
+  return scored[0].code;
 }
 
 function addCodeFromPicker(code) {
