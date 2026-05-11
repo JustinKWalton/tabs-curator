@@ -2333,7 +2333,16 @@ async function onContextEdit() {
   if (newElem === state.element && newIssue === state.issue) return;
 
   if (state.currentCatalogId) {
-    // Existing entry — persist via rename RPC
+    // Existing entry — confirm before persisting via rename RPC
+    const changes = [];
+    if (newElem !== state.element) changes.push(`Element: ${state.element} → ${newElem}`);
+    if (newIssue !== state.issue) changes.push(`Issue: ${state.issue} → ${newIssue}`);
+    const ok = confirm(`Rename this saved catalog entry?\n\n${changes.join('\n')}\n\nThis updates the existing entry in place.`);
+    if (!ok) {
+      el.textContent  = state.element;
+      iss.textContent = state.issue;
+      return;
+    }
     try {
       const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_rename_entry`, {
         method: 'POST',
@@ -2387,7 +2396,12 @@ async function onSubjectChange() {
   const newSubject = $('#ctxSubj').value;
   if (!newSubject || newSubject === state.subject) return;
   if (state.currentCatalogId) {
-    // Existing entry — call rename RPC with p_subject
+    // Existing entry — confirm before persisting via rename RPC
+    const ok = confirm(`Re-subject this saved catalog entry?\n\nFrom: ${state.subject}\nTo: ${newSubject}\n\nThis updates the existing entry in place.`);
+    if (!ok) {
+      $('#ctxSubj').value = state.subject;
+      return;
+    }
     try {
       const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_rename_entry`, {
         method: 'POST',
