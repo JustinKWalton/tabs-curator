@@ -1671,6 +1671,8 @@ const codesList = $('#codesList');
 const codesMeta = $('#codesMeta');
 
 let stack = [];   // breadcrumb stack: ['subject', {subject:'Toilet Rooms'}, ...]
+let currentSearch = '';   // persists across navigation so "flush" follows you Subject → Element → Issue
+
 let state = {
   subject: null, element: null, issue: null,
   status: 'Not Acceptable',
@@ -1817,6 +1819,9 @@ function showSubject() {
   titleEl.textContent = 'Markup Catalog Curator';
   subEl.textContent = '13 of ~280 tuples curated · 30 subjects';
   progBar.style.width = '5%';
+  // Persistent search: re-apply whatever's in currentSearch
+  $('#searchInput').value = currentSearch || '';
+  applySearchToSubjectScreen();
 }
 
 function showElement(subject) {
@@ -1855,6 +1860,9 @@ function showElement(subject) {
       card.addEventListener('click', () => showIssue(card.dataset.elem));
     });
   }
+  // Persistent search: re-apply whatever's in currentSearch
+  $('#elementSearch').value = currentSearch || '';
+  applySearchToElementScreen();
 }
 
 function showIssue(element) {
@@ -1892,6 +1900,9 @@ function showIssue(element) {
       card.addEventListener('click', () => showCurate(card.dataset.issue));
     });
   }
+  // Persistent search: re-apply whatever's in currentSearch
+  $('#issueSearch').value = currentSearch || '';
+  applySearchToIssueScreen();
 }
 
 async function showCurate(issue) {
@@ -2501,27 +2512,17 @@ function issueMatchesQuery(i, elementName, q) {
   return false;
 }
 
-$('#elementSearch').addEventListener('input', () => {
-  const q = $('#elementSearch').value.trim();
-  document.querySelectorAll('#elementGrid .ecard').forEach(card => {
-    const elemName = card.dataset.elem;
-    const elem = (ELEMENTS_BY_SUBJECT[state.subject] || []).find(x => x.name === elemName);
-    card.style.display = (!q || (elem && elementMatchesQuery(elem, q))) ? '' : 'none';
+// Persistent-search helpers: search text follows the user through Subject → Element → Issue
+function syncSearchInputs(q) {
+  currentSearch = q;
+  ['searchInput', 'elementSearch', 'issueSearch'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && el.value !== q) el.value = q;
   });
-});
-$('#issueSearch').addEventListener('input', () => {
-  const q = $('#issueSearch').value.trim();
-  document.querySelectorAll('#issueList .icard').forEach(card => {
-    const issueName = card.dataset.issue;
-    const issue = (ISSUES_BY_ELEMENT[state.element] || []).find(x => x.name === issueName);
-    card.style.display = (!q || (issue && issueMatchesQuery(issue, state.element, q))) ? '' : 'none';
-  });
-});
+}
 
-// Live filter on subject screen — smart search across subjects, elements, issues, notes, codes
-const search = $('#searchInput');
-search.addEventListener('input', () => {
-  const q = search.value.trim();
+function applySearchToSubjectScreen() {
+  const q = (currentSearch || '').trim();
   document.querySelectorAll('#subjectScreen .chip').forEach(c => {
     const subj = decode(c.dataset.subj);
     c.style.display = subjectMatchesQuery(subj, q) ? '' : 'none';
@@ -2534,6 +2535,40 @@ search.addEventListener('input', () => {
       next.style.display = visible ? '' : 'none';
     }
   });
+}
+
+function applySearchToElementScreen() {
+  const q = (currentSearch || '').trim();
+  document.querySelectorAll('#elementGrid .ecard').forEach(card => {
+    const elemName = card.dataset.elem;
+    const elem = (ELEMENTS_BY_SUBJECT[state.subject] || []).find(x => x.name === elemName);
+    card.style.display = (!q || (elem && elementMatchesQuery(elem, q))) ? '' : 'none';
+  });
+}
+
+function applySearchToIssueScreen() {
+  const q = (currentSearch || '').trim();
+  document.querySelectorAll('#issueList .icard').forEach(card => {
+    const issueName = card.dataset.issue;
+    const issue = (ISSUES_BY_ELEMENT[state.element] || []).find(x => x.name === issueName);
+    card.style.display = (!q || (issue && issueMatchesQuery(issue, state.element, q))) ? '' : 'none';
+  });
+}
+
+$('#elementSearch').addEventListener('input', () => {
+  syncSearchInputs($('#elementSearch').value);
+  applySearchToElementScreen();
+});
+$('#issueSearch').addEventListener('input', () => {
+  syncSearchInputs($('#issueSearch').value);
+  applySearchToIssueScreen();
+});
+
+// Live filter on subject screen — smart search across subjects, elements, issues, notes, codes
+const search = $('#searchInput');
+search.addEventListener('input', () => {
+  syncSearchInputs(search.value);
+  applySearchToSubjectScreen();
 });
 
 // Toast helper
