@@ -178,9 +178,21 @@
   }
   .curate-context .ctx-elem {
     font-size: 18px; font-weight: 600; color: var(--text); line-height: 1.2;
+    padding: 2px 6px; margin-left: -6px; border-radius: 4px;
+    cursor: text; outline: none; border: 1px solid transparent;
   }
+  .curate-context .ctx-elem:hover { background: rgba(255,255,255,0.03); }
+  .curate-context .ctx-elem:focus { background: var(--panel-2); border-color: var(--accent); }
   .curate-context .ctx-issue {
     font-size: 14px; color: var(--accent); margin-top: 4px; font-weight: 500;
+    padding: 2px 6px; margin-left: -6px; border-radius: 4px;
+    cursor: text; outline: none; border: 1px solid transparent;
+  }
+  .curate-context .ctx-issue:hover { background: rgba(255,255,255,0.03); }
+  .curate-context .ctx-issue:focus { background: var(--panel-2); border-color: var(--accent); }
+  .curate-context .edit-hint {
+    font-size: 10px; color: var(--text-faint); margin-top: 8px;
+    font-style: italic;
   }
   .curate-section { margin-bottom: 18px; }
   .curate-section .sec-head {
@@ -628,12 +640,20 @@
 <div class="container curate hidden" id="curateScreen">
   <div class="curate-context">
     <div class="ctx-subj" id="ctxSubj"></div>
-    <div class="ctx-elem" id="ctxElem"></div>
-    <div class="ctx-issue" id="ctxIssue"></div>
+    <div class="ctx-elem"  id="ctxElem"  contenteditable="true" spellcheck="false"></div>
+    <div class="ctx-issue" id="ctxIssue" contenteditable="true" spellcheck="false"></div>
+    <div class="edit-hint">Tap Element or Issue to rename — saves on blur.</div>
   </div>
   <div class="edit-mode-banner" id="editBanner">
     <span>✎ Editing existing variant</span>
     <button type="button" class="exit" id="exitEditBtn">Exit edit mode</button>
+  </div>
+  <div class="scoping-banner" id="scopingBanner">
+    <span class="msg" id="scopingMsg"></span>
+    <div class="actions">
+      <button class="add-sc" id="scopingAdd" type="button">+ Add</button>
+      <button class="dismiss-sc" id="scopingDismiss" type="button">Dismiss</button>
+    </div>
   </div>
   <div class="curate-section">
     <div class="sec-head">
@@ -653,13 +673,6 @@
       <span class="meta" id="codesMeta"></span>
     </div>
     <div class="codes-list" id="codesList"></div>
-    <div class="scoping-banner" id="scopingBanner">
-      <span class="msg" id="scopingMsg"></span>
-      <div class="actions">
-        <button class="add-sc" id="scopingAdd" type="button">+ Add</button>
-        <button class="dismiss-sc" id="scopingDismiss" type="button">Dismiss</button>
-      </div>
-    </div>
     <div class="add-code" id="addCodeBtn" style="margin-top:8px">+ Add code reference…</div>
   </div>
 
@@ -2128,6 +2141,77 @@ async function approveToCatalog() {
 $('#approveBtn').addEventListener('click', approveToCatalog);
 $('#exitEditBtn').addEventListener('click', exitEditMode);
 $('#deleteEntryBtn').addEventListener('click', deleteCurrentEntry);
+
+// =================================================================
+// Inline edit Element + Issue from the curate context block.
+// New entries: just update local state.  Existing: call rename RPC.
+// =================================================================
+async function onContextEdit() {
+  const el = $('#ctxElem');
+  const iss = $('#ctxIssue');
+  // Strip newlines that contenteditable lets in (Enter creates <br>)
+  const newElem = (el.textContent || '').trim();
+  const newIssue = (iss.textContent || '').trim();
+
+  if (!newElem || !newIssue) {
+    showToast('Element and Issue cannot be empty', false);
+    el.textContent  = state.element;
+    iss.textContent = state.issue;
+    return;
+  }
+  if (newElem === state.element && newIssue === state.issue) return;
+
+  if (state.currentCatalogId) {
+    // Existing entry — persist via rename RPC
+    try {
+      const resp = await fetch(`${SUPABASE_URL}/rest/v1/rpc/catalog_rename_entry`, {
+        method: 'POST',
+        headers: {
+          'apikey': SUPABASE_ANON_KEY,
+          'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          p_catalog_id: state.currentCatalogId,
+          p_element:    newElem,
+          p_issue:      newIssue,
+        }),
+      });
+      const result = await resp.json();
+      if (!resp.ok) throw new Error(result?.message || result?.error || `HTTP ${resp.status}`);
+      // Update local state + headers + breadcrumb
+      state.element = newElem;
+      state.issue = newIssue;
+      titleEl.textContent = newIssue;
+      subEl.textContent = `${state.subject} › ${newElem}`;
+      showToast(`✓ Renamed to ${newElem} / ${newIssue}`, true);
+      // Refresh chip badges from live state (element/issue may now be in different slot)
+      refreshFromLiveCatalog();
+    } catch (err) {
+      showToast(`✕ Rename failed: ${err.message}`, false);
+      el.textContent  = state.element;
+      iss.textContent = state.issue;
+    }
+  } else {
+    // New entry — change applies on next Approve
+    state.element = newElem;
+    state.issue = newIssue;
+    titleEl.textContent = newIssue;
+    subEl.textContent = `${state.subject} › ${newElem}`;
+    showToast('Pending — will save on Approve', true);
+  }
+}
+
+['ctxElem', 'ctxIssue'].forEach(id => {
+  const el = $('#' + id);
+  el.addEventListener('blur', onContextEdit);
+  // Treat Enter key as commit-and-blur (avoids inserting a <br>)
+  el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); el.blur(); }
+  });
+});
+
+// Scoping suggestion banner buttons
 
 // Scoping suggestion banner buttons
 $('#scopingAdd').addEventListener('click', () => {
