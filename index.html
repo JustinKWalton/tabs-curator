@@ -1706,6 +1706,22 @@ function refreshSubjectBadges() {
   });
 }
 
+// Live catalog stats (populated by refreshFromLiveCatalog, used by topbar subtitle)
+let liveCatalogStats = { entries: null, variants: null, subjects: null };
+
+function updateSubjectSubtitle() {
+  if (state.element || state.issue) return;  // only the subject screen
+  const totalMinedTuples = Object.keys(REAL_NOTES_BY_PAIR).length;
+  const totalSubjects = Object.keys(SUBJECT_CODE_ANCHORS).length;
+  const e = liveCatalogStats.entries;
+  const s = liveCatalogStats.subjects;
+  if (e == null) {
+    subEl.textContent = `${totalSubjects} subjects · loading catalog…`;
+  } else {
+    subEl.textContent = `${e} entries curated of ${totalMinedTuples} mined tuples · ${s} of ${totalSubjects} subjects covered`;
+  }
+}
+
 // Pull live curation state from Supabase so the badges reflect what's actually in catalog,
 // not just what we've curated this session.
 async function refreshFromLiveCatalog() {
@@ -1732,7 +1748,11 @@ async function refreshFromLiveCatalog() {
         }
       }
     }
+    // Update live stats for the topbar subtitle
+    liveCatalogStats.entries  = rows.length;
+    liveCatalogStats.subjects = new Set(rows.map(r => r.subject)).size;
     refreshSubjectBadges();
+    updateSubjectSubtitle();
   } catch (e) { /* offline is fine — chips just stay at hardcoded counts */ }
 }
 
@@ -1817,8 +1837,10 @@ function showSubject() {
   pushNav('subject', {});
   setScreen('subject');
   titleEl.textContent = 'Markup Catalog Curator';
-  subEl.textContent = '13 of ~280 tuples curated · 30 subjects';
-  progBar.style.width = '5%';
+  updateSubjectSubtitle();
+  const totalMined = Object.keys(REAL_NOTES_BY_PAIR).length;
+  const cur = liveCatalogStats.entries || 0;
+  progBar.style.width = totalMined ? Math.min(100, Math.round((cur / totalMined) * 100)) + '%' : '0%';
   // Persistent search: re-apply whatever's in currentSearch
   $('#searchInput').value = currentSearch || '';
   applySearchToSubjectScreen();
