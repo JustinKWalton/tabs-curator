@@ -300,6 +300,11 @@
     background: #1e3a5f; color: #bfdbfe; border-color: #2563eb;
   }
   .approve-bar .approve.update-mode:active { background: #1e40af; }
+  .approve-bar .approve:disabled {
+    opacity: 0.45; cursor: not-allowed;
+    background: var(--panel-2); color: var(--text-faint); border-color: var(--border-strong);
+  }
+  .approve-bar .approve:disabled:active { background: var(--panel-2); }
 
   /* In-picker forward-ref chain (Cascades to: ...) */
   .modal-item .body .refs-list {
@@ -2009,25 +2014,54 @@ async function fetchExistingForEntry(element, issue) {
   return { catalog, notes };
 }
 
+// Compute a stable signature of "note text + ordered code list" so we can
+// detect when the user has actually changed anything from the loaded variant.
+function editSignature() {
+  const note = (noteText.value || '').trim();
+  const codes = [...codesList.querySelectorAll('.ccard')].map(c => c.dataset.code).join(',');
+  return note + '|||' + codes;
+}
+
+function refreshApproveButtonState() {
+  const btn = $('#approveBtn');
+  if (state.editingNoteId) {
+    btn.classList.add('update-mode');
+    const changed = editSignature() !== state.editOriginalSig;
+    if (changed) {
+      btn.disabled = false;
+      btn.textContent = '💾 Update This Variant';
+    } else {
+      btn.disabled = true;
+      btn.textContent = '💾 No changes yet';
+    }
+  } else {
+    btn.classList.remove('update-mode');
+    btn.disabled = false;
+    btn.textContent = '✓ Approve & Add to Catalog';
+  }
+}
+
 function enterEditMode(noteId, noteText_, codeRefs) {
   state.editingNoteId = noteId;
   noteText.value = noteText_;
   autoResize(noteText);
   // Replace code list with the variant's codes
   renderCodesList((codeRefs || []).map(c => ({ code: c.code || c.section, title: c.title || '', body: c.body || '' })));
+  // Snapshot AFTER renderCodesList so the signature reflects what was loaded
+  state.editOriginalSig = editSignature();
   $('#editBanner').classList.add('show');
-  const btn = $('#approveBtn');
-  btn.classList.add('update-mode');
-  btn.textContent = '💾 Update This Variant';
+  refreshApproveButtonState();
 }
 
 function exitEditMode() {
   state.editingNoteId = null;
+  state.editOriginalSig = null;
   $('#editBanner').classList.remove('show');
-  const btn = $('#approveBtn');
-  btn.classList.remove('update-mode');
-  btn.textContent = '✓ Approve & Add to Catalog';
+  refreshApproveButtonState();
 }
+
+// Watch the note text for typing — re-evaluate the approve button on each keystroke
+noteText.addEventListener('input', refreshApproveButtonState);
 
 function renderCodesList(codes) {
   // Render given list of {code, title, body} into codesList. Reuses ccard structure.
@@ -2047,6 +2081,7 @@ function renderCodesList(codes) {
       x.closest('.ccard').remove();
       codesMeta.textContent = `${codesList.querySelectorAll('.ccard').length} loaded`;
       updateScopingBanner();
+      refreshApproveButtonState();
     });
   });
   codesMeta.textContent = `${codes.length} loaded · tap ✕ to remove`;
@@ -2854,10 +2889,12 @@ function addCodeFromPicker(code) {
     e.stopPropagation();
     div.remove();
     codesMeta.textContent = `${codesList.querySelectorAll('.ccard').length} loaded`;
+    refreshApproveButtonState();
   });
   codesMeta.textContent = `${codesList.querySelectorAll('.ccard').length} loaded · tap ✕ to remove`;
   showToast(`✓ Added ${code}`, true);
   updateScopingBanner();
+  refreshApproveButtonState();
   // Stay in the picker so you can add more — re-render to grey the just-added one
   renderPicker();
 }
@@ -2987,6 +3024,7 @@ window.addEventListener('pointerup', () => {
   dragPlaceholder.remove();
   dragCard = null;
   dragPlaceholder = null;
+  refreshApproveButtonState();  // reorder counts as a change
 });
 
 // =================================================================
