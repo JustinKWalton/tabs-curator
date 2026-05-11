@@ -379,10 +379,7 @@
   }
   .ccard.dragging { box-shadow: 0 12px 32px rgba(0,0,0,0.6); opacity: .95;
                     border-color: var(--accent); cursor: grabbing; }
-  .ccard-placeholder {
-    border: 2px dashed var(--accent); border-radius: 10px;
-    background: rgba(56,189,248,0.08); margin-bottom: 8px;
-  }
+  /* (.ccard-placeholder removed — drag now uses smooth slide animation instead) */
   .ccard .dh {
     position: absolute; top: 0; left: 0; bottom: 0; width: 28px;
     display: flex; align-items: center; justify-content: center;
@@ -3042,9 +3039,16 @@ $('#variantClose').addEventListener('click', closeVariantPicker);
 variantPicker.addEventListener('click', e => { if (e.target === variantPicker) closeVariantPicker(); });
 
 // =================================================================
-// Drag-to-reorder for code refs
+// Drag-to-reorder for code refs — iOS-style smooth reorder.
+// No placeholder. The other cards slide out of the way as you drag.
 // =================================================================
-let dragCard = null, dragPlaceholder = null, dragOffsetY = 0;
+let dragCard = null;
+let dragCardsSnapshot = [];      // .ccard refs at drag start
+let dragOriginalTops = [];       // original Y top of each card at drag start
+let dragOriginalIdx = 0;
+let dragCurrentIdx = 0;
+let dragInitialPointerY = 0;
+let dragStepHeight = 0;          // card height + gap, used for hit-slot math
 
 codesList.addEventListener('pointerdown', e => {
   const handle = e.target.closest('.dh');
@@ -3052,23 +3056,17 @@ codesList.addEventListener('pointerdown', e => {
   e.preventDefault();
   dragCard = handle.closest('.ccard');
   if (!dragCard) return;
-  const rect = dragCard.getBoundingClientRect();
-  dragOffsetY = e.clientY - rect.top;
 
-  // Placeholder takes the card's slot
-  dragPlaceholder = document.createElement('div');
-  dragPlaceholder.className = 'ccard-placeholder';
-  dragPlaceholder.style.height = rect.height + 'px';
-  dragCard.parentNode.insertBefore(dragPlaceholder, dragCard);
+  dragCardsSnapshot = [...codesList.querySelectorAll('.ccard')];
+  dragOriginalTops  = dragCardsSnapshot.map(c => c.getBoundingClientRect().top);
+  dragOriginalIdx   = dragCardsSnapshot.indexOf(dragCard);
+  dragCurrentIdx    = dragOriginalIdx;
+  dragInitialPointerY = e.clientY;
+  dragStepHeight    = dragCard.getBoundingClientRect().height + 8;  // +8px gap
 
-  // Float the dragging card
   dragCard.classList.add('dragging');
-  dragCard.style.position = 'fixed';
-  dragCard.style.left = rect.left + 'px';
-  dragCard.style.top = rect.top + 'px';
-  dragCard.style.width = rect.width + 'px';
   dragCard.style.zIndex = '1000';
-  dragCard.style.pointerEvents = 'none';
+  dragCard.style.transition = 'none';
 
   handle.setPointerCapture(e.pointerId);
 });
@@ -3076,32 +3074,71 @@ codesList.addEventListener('pointerdown', e => {
 window.addEventListener('pointermove', e => {
   if (!dragCard) return;
   e.preventDefault();
-  dragCard.style.top = (e.clientY - dragOffsetY) + 'px';
+  const dy = e.clientY - dragInitialPointerY;
+  dragCard.style.transform = `translateY(${dy}px)`;
 
-  // Find sibling .ccards (excluding the dragging one)
-  const siblings = [...codesList.querySelectorAll('.ccard')].filter(c => c !== dragCard);
-  for (const sib of siblings) {
-    const r = sib.getBoundingClientRect();
-    const mid = r.top + r.height / 2;
-    if (e.clientY < mid && sib.previousElementSibling !== dragPlaceholder) {
-      sib.parentNode.insertBefore(dragPlaceholder, sib);
-      return;
-    } else if (e.clientY >= mid && sib.nextElementSibling !== dragPlaceholder) {
-      sib.parentNode.insertBefore(dragPlaceholder, sib.nextElementSibling);
-      return;
-    }
+  // Determine which slot the dragCard is currently over by comparing its
+  // centre Y to the original centres of the other cards.
+  const dragCenter = dragOriginalTops[dragOriginalIdx] + dragStepHeight / 2 + dy;
+  let newIdx = dragOriginalIdx;
+  for (let i = 0; i < dragOriginalTops.length; i++) {
+    if (i === dragOriginalIdx) continue;
+    const otherCenter = dragOriginalTops[i] + dragCardsSnapshot[i].getBoundingClientRect().height / 2;
+    if (i < dragOriginalIdx && dragCenter < otherCenter && i < newIdx) newIdx = i;
+    if (i > dragOriginalIdx && dragCenter > otherCenter && i > newIdx) newIdx = i;
+  }
+
+  if (newIdx === dragCurrentIdx) return;
+  dragCurrentIdx = newIdx;
+
+  // Animate the other cards into their displaced positions
+  for (let i = 0; i < dragCardsSnapshot.length; i++) {
+    const card = dragCardsSnapshot[i];
+    if (card === dragCard) continue;
+    let shift = 0;
+    if (dragOriginalIdx < newIdx && i > dragOriginalIdx && i <= newIdx) shift = -dragStepHeight;
+    else if (dragOriginalIdx > newIdx && i < dragOriginalIdx && i >= newIdx) shift = dragStepHeight;
+    card.style.transition = 'transform .18s cubic-bezier(.2,0,.2,1)';
+    card.style.transform = shift ? `translateY(${shift}px)` : '';
   }
 });
 
 window.addEventListener('pointerup', () => {
   if (!dragCard) return;
+
+  // Clean up styles on every card so layout returns to normal
+  dragCardsSnapshot.forEach(card => {
+    card.style.transition = '';
+    card.style.transform = '';
+    card.style.zIndex = '';
+  });
   dragCard.classList.remove('dragging');
-  dragCard.style.cssText = '';  // remove inline styles
-  dragPlaceholder.parentNode.insertBefore(dragCard, dragPlaceholder);
-  dragPlaceholder.remove();
+
+  // Commit DOM reorder if changed
+  if (dragCurrentIdx !== dragOriginalIdx) {
+    const target = dragCardsSnapshot[dragCurrentIdx];
+    if (dragCurrentIdx > dragOriginalIdx) target.after(dragCard);
+    else target.before(dragCard);
+    refreshApproveButtonState();  // reorder counts as a change
+  }
+
   dragCard = null;
-  dragPlaceholder = null;
-  refreshApproveButtonState();  // reorder counts as a change
+  dragCardsSnapshot = [];
+  dragOriginalTops = [];
+});
+
+window.addEventListener('pointercancel', () => {
+  if (!dragCard) return;
+  // Restore styles, no DOM reorder
+  dragCardsSnapshot.forEach(card => {
+    card.style.transition = '';
+    card.style.transform = '';
+    card.style.zIndex = '';
+  });
+  dragCard.classList.remove('dragging');
+  dragCard = null;
+  dragCardsSnapshot = [];
+  dragOriginalTops = [];
 });
 
 // =================================================================
