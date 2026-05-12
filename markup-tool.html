@@ -269,6 +269,14 @@
   }
   .curate-context .ctx-elem:hover { background: rgba(255,255,255,0.03); }
   .curate-context .ctx-elem:focus { background: var(--panel-2); border-color: var(--accent); }
+  .curate-context .ctx-elem:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-faint); font-weight: 400; font-style: italic;
+  }
+  .curate-context .ctx-issue:empty::before {
+    content: attr(data-placeholder);
+    color: var(--text-faint); font-weight: 400; font-style: italic;
+  }
   .curate-context .ctx-issue {
     font-size: 14px; color: var(--accent); margin-top: 4px; font-weight: 500;
     padding: 2px 6px; margin-left: -6px; border-radius: 4px;
@@ -327,12 +335,13 @@
   .variant-item .tmpl-tag { background: var(--bg); color: var(--text-faint); }
   .variant-item .del-variant {
     position: absolute; top: 8px; right: 8px;
-    width: 26px; height: 26px; border-radius: 13px;
-    background: var(--panel-2); color: var(--text-faint);
-    border: 1px solid var(--border-strong);
+    width: 28px; height: 28px; border-radius: 14px;
+    background: rgba(192, 57, 43, 0.18); color: #FCA5A5;
+    border: 1px solid rgba(192, 57, 43, 0.55);
     display: flex; align-items: center; justify-content: center;
-    font-size: 12px; cursor: pointer; line-height: 1;
+    font-size: 13px; cursor: pointer; line-height: 1; font-weight: 600;
   }
+  .variant-item .del-variant:hover { background: rgba(192, 57, 43, 0.35); color: #FFFFFF; }
   .variant-item .del-variant:active { background: var(--danger); color: white; border-color: var(--danger); }
   .variant-item.saved .vt { padding-right: 32px; }
 
@@ -3329,26 +3338,61 @@ $('#projName').textContent = projectCtx.name;
 document.title = `${projectCtx.number} · TABS Markup Tool`;
 
 // =================================================================
-// TAB SWITCHING — Catalog (curator cascade) vs Codes (placeholder for now)
+// TAB SWITCHING — Catalog (curator cascade) vs Codes (blank compose)
 // =================================================================
-const codesTabPlaceholder = (() => {
-  const el = document.createElement('div');
-  el.id = 'codesScreen';
-  el.className = 'container hidden';
-  el.innerHTML = `
-    <div style="background:var(--panel);border:1px dashed var(--border);border-radius:14px;padding:40px 28px;max-width:600px;margin:30px auto;text-align:center">
-      <h3 style="margin:0 0 6px 0;font-size:16px;color:var(--text);font-weight:600">🔍 Codes tab</h3>
-      <p style="margin:0;font-size:13.5px;color:var(--text-dim);line-height:1.55">
-        Custom-markup-builder lives here. Same curate card layout as Catalog, but starts blank with smart Element / Issue dropdowns (filtered by Subject; type-your-own as fallback).
-      </p>
-      <p style="margin-top:14px;font-size:12px;color:var(--text-faint)">Coming in the next round — Catalog tab works now.</p>
-    </div>`;
-  document.body.appendChild(el);
-  return el;
-})();
-screens.codes = codesTabPlaceholder;
-
 let currentTab = 'catalog';
+
+function showBlankCompose() {
+  // Same curate card UI, but blank — user picks Subject, types Element + Issue,
+  // writes note, adds codes, fills Location, and hits Send.
+  state = {
+    subject: Object.keys(SUBJECT_CODE_ANCHORS).sort()[0],  // first alphabetically
+    element: '',
+    issue: '',
+    status: 'Not Acceptable',
+    currentCatalogId: null,
+    editingNoteId: null,
+    savedVariants: [],
+  };
+
+  setScreen('curate');
+  backBtn.classList.add('hidden');     // no cascade back-target
+  $('#homeBtn').classList.add('hidden');
+
+  // Populate Subject dropdown if first time
+  const subjSelect = $('#ctxSubj');
+  if (!subjSelect.options.length) {
+    const allSubjects = Object.keys(SUBJECT_CODE_ANCHORS).sort();
+    subjSelect.innerHTML = allSubjects.map(s => `<option value="${s.replace(/"/g, '&quot;')}">${s}</option>`).join('');
+  }
+  subjSelect.value = state.subject;
+
+  // Clear element/issue text + show placeholder via empty-state
+  $('#ctxElem').textContent = '';
+  $('#ctxElem').setAttribute('data-placeholder', 'Tap to type element name (e.g., Water Closet)');
+  $('#ctxIssue').textContent = '';
+  $('#ctxIssue').setAttribute('data-placeholder', 'Tap to type issue name (e.g., Clear Floor Space)');
+
+  // Clear note, location, codes
+  noteText.value = '';
+  autoResize(noteText);
+  $('#locInput').value = '';
+  codesList.innerHTML = '';
+  codesMeta.textContent = '0 loaded — use + Add code reference to start';
+  variantsMeta.textContent = '';
+  pickVariantBtn.classList.add('hidden');
+  currentVariants = [];
+
+  // Hide cascade-only affordances
+  $('#editBanner').classList.remove('show');
+  $('#scopingBanner').classList.remove('show');
+  $('#deleteEntryZone').classList.add('hidden');
+
+  // Reset baseline so Send button only enables once user types something
+  state.originalSig = editSignature();
+  refreshApproveButtonState();
+}
+
 function switchTab(tab) {
   if (tab === currentTab) return;
   currentTab = tab;
@@ -3356,13 +3400,9 @@ function switchTab(tab) {
     t.classList.toggle('active', t.dataset.tab === tab);
   });
   if (tab === 'catalog') {
-    codesTabPlaceholder.classList.add('hidden');
     showSubject();
   } else {
-    Object.values(screens).forEach(s => s && s.classList.add('hidden'));
-    codesTabPlaceholder.classList.remove('hidden');
-    backBtn.classList.add('hidden');
-    approveBar.classList.add('hidden');
+    showBlankCompose();
   }
 }
 document.querySelectorAll('.tab-strip .tab').forEach(t => {
